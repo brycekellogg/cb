@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+
+
+# Define all the possible copy actions.
+#
+# Copy actions are defined as strings so that we can build a pipeline that
+# copies to multiple locations (specifically somewhere + OSC52). Additionally,
+# this lets us easily build a help string that shows exactly what command
+# will be run on a copy action.
+#
+# Non-OSC52 copy actions use tee so that we can send stdin to the actual
+# copy command and also forward it to the next command in the pipeline. The
+# OSC52 copy actions don't need to use tee because they will always be the
+# last action in the pipeline.
+cbCopy_wayland='tee >(wl-copy)'
+cbCopy_xsel='tee >(xsel -bi)'
+cbCopy_xclip='tee >(xclip -i -selection clipboard)'
+cbCopy_mac='tee >(pbcopy)'
+cbCopy_tmux='tee >(tmux load-buffer -b cb -)'
+cbCopy_tmpFile='tee /tmp/cb.txt'
+cbCopy_osc52='base64 | xargs printf "\e]52;c;%s\a"'
+cbCopy_osc52Tmux='base64 | xargs printf "\ePtmux;\e\e]52;c;%s\a\e\\"'
+
+
+# Define functions for checking the current configuration
+is_linux()   { [[ "${OSTYPE}" == *"linux"*  ]]; }
+is_mac()     { [[ "${OSTYPE}" == *"darwin"* ]]; }
+is_wsl()     { [[ -n "${WSL_DISTRO_NAME}" ]]; }
+is_wayland() { [[ -n "${WAYLAND_DISPLAY}" ]]; }
+is_x11()     { [[ -n "${DISPLAY}" ]]; }
+is_tmux()    { [[ -n "${TMUX}" ]]; }
+is_ssh()     { [[ -n "${SSH_CLIENT}" || -n "${SSH_TTY}" ]]; }
+
+
+# Define functions for checking installed binaries
+has_base64() { command -v base64  &> /dev/null; }
+has_xsel()   { command -v xsel    &> /dev/null; }
+has_xclip()  { command -v xclip   &> /dev/null; }
+has_wlcopy() { command -v wl-copy &> /dev/null; }
+has_pbcopy() { command -v pbcopy  &> /dev/null; }
+
+
+# Decide what copy action to use
+if   is_mac     && has_pbcopy; then cbCopy="${cbCopy_mac}"
+elif is_wayland && has_wlcopy; then cbCopy="${cbCopy_wayland}"
+elif is_x11     && has_xsel;   then cbCopy="${cbCopy_xsel}"
+elif is_x11     && has_xclip;  then cbCopy="${cbCopy_xclip}"
+elif is_tmux;                  then cbCopy="${cbCopy_tmux}"
+else                                cbCopy="${cbCopy_tmpFile}"
+fi
+
+
+# Decide if we should append OSC copy action.
+#
+# Note that in tmux, we need to have a different copy action
+# because TMUX requires OSC52 escape sequences to be escaped
+# and preceded by the TMUX escape sequence.
+#
+# If we are not in an SSH session, redirect the final stdin to
+# null so that we can copy without dumping data to the terminal.
+if   is_ssh && has_base64 && is_tmux; then cbCopy+=" | ${cbCopy_osc52Tmux}"
+elif is_ssh && has_base64;            then cbCopy+=" | ${cbCopy_osc52}"
+else                                       cbCopy+=" > /dev/null"
+fi
+
+
+# Check for the help flag and print out help text
+if [[ ${1} == '--help' ]]; then
+
+    printf "%s - clipboard helper for command line\n\n" $(basename ${0})
+
+# Copy using OSC 52
+#
+# Prints to the terminal the contents of the first argument (base64 encoded)
+# surrounded by OSC 52 escape sequences. Optionally, if run inside a tmux
+# instance, will also use the tmux passthrough escape sequence.
+#
+# https://github.com/tmux/tmux/wiki/FAQ#what-is-the-passthrough-escape-sequence-and-how-do-i-use-it
+
+
+    printf "\nConfiguration:\n"
+
+    (is_wsl   && printf "  OS:      Linux (WSL)\n") ||
+    (is_linux && printf "  OS:      Linux\n"      ) ||
+    (is_mac   && printf "  OS:      MacOS\n"      ) ||
+                 printf "  OS:      Uknown\n"
+
+    (is_wayland && printf "  Display: Wayland\n") ||
+    (is_x11     && printf "  Display: X11\n"    ) ||
+                   printf "  Display: None\n"
+    printf "\n"
+
+    is_ssh  && printf "  ssh:     Y\n"  || printf "  ssh:     N\n"
+    is_tmux && printf "  tmux:    Y\n"  || printf "  tmux:    N\n"
+    
+    printf "\n"
+
+    has_base64 && printf "  base64:  Y\n" || printf "  base64:  N\n"
+    has_xsel   && printf "  xsel:    Y\n" || printf "  xsel:    N\n"
+    has_xclip  && printf "  xclip:   Y\n" || printf "  xclip:   N\n"
+    has_wlcopy && printf "  wl-copy: Y\n" || printf "  wl-copy: N\n"
+    has_pbcopy && printf "  pbcopy:  Y\n" || printf "  pbcopy:  N\n"
+
+    printf "\n"
+    printf "Copy  command: %s\n" "${cbCopy}"
+    printf "Paste command: %s\n" "TODO"
+    printf "\n"
+
+    exit
+fi
+
+
+# Test if STDIN is connected to a terminal or not. If it is connected to a
+# terminal, we have called the tool like "cb" or "cb | less" and want to
+# perform a paste. If it is not connected to a terminal, we have called the
+# tool like "echo 'test' | cb" and want to perform a copy.
+#
+# The bash conditional expression "-t fd" returns true of the file descriptor
+# fd is open and refers to a terminal. File descriptor zero refers to STDIN.
+if [ -t 0 ]; then
+    eval "${cbPaste}"
+else
+    eval "${cbCopy}"
+fi
+
