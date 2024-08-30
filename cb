@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 
-# Define all the possible copy actions.
+# Define all the possible copy & paste actions.
 #
 # Copy actions are defined as strings so that we can build a pipeline that
 # copies to multiple locations (specifically somewhere + OSC52). Additionally,
@@ -12,6 +12,9 @@
 # copy command and also forward it to the next command in the pipeline. The
 # OSC52 copy actions don't need to use tee because they will always be the
 # last action in the pipeline.
+#
+# Paste actions don't use tee because we will only ever be pasting from
+# a single source.
 cbCopy_wayland='tee >(wl-copy)'
 cbCopy_xsel='tee >(xsel -bi)'
 cbCopy_xclip='tee >(xclip -i -selection clipboard)'
@@ -20,6 +23,13 @@ cbCopy_tmux='tee >(tmux load-buffer -b cb -)'
 cbCopy_tmpFile='tee /tmp/cb.txt'
 cbCopy_osc52='base64 | xargs printf "\e]52;c;%s\a"'
 cbCopy_osc52Tmux='base64 | xargs printf "\ePtmux;\e\e]52;c;%s\a\e\\"'
+
+cbPaste_wayland='wl-paste'
+cbPaste_xsel=''
+cbPaste_xclip=''
+cbPaste_mac='pbpaste'
+cbPaste_tmux=''
+cbPaste_tmpFile='cat /tmp/cb.txt'
 
 
 # Define functions for checking the current configuration
@@ -33,11 +43,13 @@ is_ssh()     { [[ -n "${SSH_CLIENT}" || -n "${SSH_TTY}" ]]; }
 
 
 # Define functions for checking installed binaries
-has_base64() { command -v base64  &> /dev/null; }
-has_xsel()   { command -v xsel    &> /dev/null; }
-has_xclip()  { command -v xclip   &> /dev/null; }
-has_wlcopy() { command -v wl-copy &> /dev/null; }
-has_pbcopy() { command -v pbcopy  &> /dev/null; }
+has_base64()  { command -v base64   &> /dev/null; }
+has_xsel()    { command -v xsel     &> /dev/null; }
+has_xclip()   { command -v xclip    &> /dev/null; }
+has_wlcopy()  { command -v wl-copy  &> /dev/null; }
+has_wlpaste() { command -v wl-paste &> /dev/null; }
+has_pbcopy()  { command -v pbcopy   &> /dev/null; }
+has_pbpaste() { command -v pbpaste  &> /dev/null; }
 
 
 # Decide what copy action to use
@@ -47,6 +59,15 @@ elif is_x11     && has_xsel;   then cbCopy="${cbCopy_xsel}"
 elif is_x11     && has_xclip;  then cbCopy="${cbCopy_xclip}"
 elif is_tmux;                  then cbCopy="${cbCopy_tmux}"
 else                                cbCopy="${cbCopy_tmpFile}"
+fi
+
+# Decide what paste action to use
+if   is_mac     && has_pbpaste; then cbPaste="${cbPaste_mac}"
+elif is_wayland && has_wlpaste; then cbPaste="${cbPaste_wayland}"
+elif is_x11     && has_xsel;    then cbPaste="${cbPaste_xsel}"
+elif is_x11     && has_xclip;   then cbPaste="${cbPaste_xclip}"
+elif is_tmux;                   then cbPaste="${cbPaste_tmux}"
+else                                 cbPaste="${cbPaste_tmpFile}"
 fi
 
 
@@ -103,7 +124,7 @@ if [[ ${1} == '--help' ]]; then
 
     printf "\n"
     printf "Copy  command: %s\n" "${cbCopy}"
-    printf "Paste command: %s\n" "TODO"
+    printf "Paste command: %s\n" "${cbPaste}"
     printf "\n"
 
     exit
